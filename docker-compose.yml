@@ -1,0 +1,49 @@
+version: "3.9"
+
+services:
+  auth-api:
+    build: ./services/auth-service
+    container_name: auth-api
+    command: gunicorn config.wsgi:application --bind 0.0.0.0:8000
+    volumes:
+      - ./services/auth-service/app:/app
+    env_file:
+      - ./services/auth-service/.env
+    depends_on:
+      - postgres
+      - redis
+    ports:
+      - "8000:8000"
+
+  celery-worker:
+    build: ./services/auth-service
+    container_name: celery-worker
+    command: celery -A config worker -l info
+    volumes:
+      - ./services/auth-service/app:/app
+    env_file:
+      - ./services/auth-service/.env
+    depends_on:
+      - redis
+      - postgres
+
+  postgres:
+    image: postgres:16
+    container_name: postgres
+    environment:
+      POSTGRES_DB: auth_db
+      POSTGRES_USER: auth_user
+      POSTGRES_PASSWORD: auth_password
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+
+  redis:
+    image: redis:7
+    container_name: redis
+    ports:
+      - "6379:6379"
+
+volumes:
+  postgres_data:
