@@ -105,9 +105,6 @@ class VerifyOTPSerializer(serializers.Serializer):
     otp = serializers.CharField()
 
 
-
-User = get_user_model()
-
 class LoginSerializer(serializers.Serializer):
     email = serializers.EmailField()
     password = serializers.CharField(write_only=True)
@@ -129,3 +126,75 @@ class LoginSerializer(serializers.Serializer):
     
 class VerifyLoginOTPSerializer(serializers.Serializer):
     otp = serializers.CharField(min_length=6, max_length=6)
+    
+
+class ProfileDetailSerializer(serializers.Serializer):
+    # ---- User fields ----
+    email = serializers.EmailField()
+    username = serializers.CharField()
+    full_name = serializers.CharField()
+    phone = serializers.CharField(allow_blank=True, required=False)
+    role = serializers.CharField()
+
+    # ---- Common profile ----
+    skills = serializers.ListField(
+        child=serializers.CharField(),
+        required=False
+    )
+    profile_image = serializers.ImageField(required=False)
+
+    # ---- Mentor-only ----
+    years_of_experience = serializers.IntegerField(required=False)
+    experience_proof = serializers.FileField(required=False)
+    
+
+class ProfileUpdateSerializer(serializers.Serializer):
+    full_name = serializers.CharField(required=False, max_length=150)
+    username = serializers.CharField(required=False, max_length=50)
+    phone = serializers.CharField(required=False)
+
+    skills = serializers.ListField(
+        child=serializers.CharField(min_length=1),
+        required=False
+    )
+
+    profile_image = serializers.ImageField(required=False)
+
+    def validate_username(self, value):
+        user = self.context["request"].user
+        if User.objects.exclude(id=user.id).filter(username=value).exists():
+            raise serializers.ValidationError("Username already taken")
+        return value
+
+    def update(self, instance, validated_data):
+        """
+        instance = request.user
+        """
+
+        # ---- USER TABLE ----
+        for field in ("full_name", "username", "phone"):
+            if field in validated_data:
+                setattr(instance, field, validated_data[field])
+
+        instance.save()
+
+        # ---- PROFILE TABLE ----
+        if instance.role == User.Role.DEVELOPER:
+            profile = instance.developer_profile
+        elif instance.role == User.Role.MENTOR:
+            profile = instance.mentor_profile
+        else:
+            return instance
+
+        if "skills" in validated_data:
+            profile.skills = [
+                s.strip().lower()
+                for s in validated_data["skills"]
+                if s.strip()
+            ]
+
+        if "profile_image" in validated_data:
+            profile.profile_image = validated_data["profile_image"]
+
+        profile.save()
+        return instance

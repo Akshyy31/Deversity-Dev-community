@@ -10,15 +10,28 @@ from .serializers import (
     VerifyOTPSerializer,
     LoginSerializer,
     VerifyLoginOTPSerializer,
+    ProfileUpdateSerializer,
+    ProfileDetailSerializer,
 )
 from .tasks import send_otp_email, send_otp_email_task
 from .utils import save_temp_file, hash_otp, generate_otp
 from .models import User, DeveloperProfile, MentorProfile
 from .redis_client import redis_client
 from .jwt import generate_tokens
+from rest_framework.parsers import MultiPartParser, FormParser
+from drf_spectacular.utils import extend_schema
+from rest_framework.permissions import IsAuthenticated, AllowAny
 
 
 class RegisterAPIView(APIView):
+    permission_classes = [AllowAny]
+    parser_classes = [MultiPartParser, FormParser]
+
+    @extend_schema(
+        request=RegistrationSerializer,
+        responses={201: None},
+        tags=["Auth"],
+    )
     def post(self, request):
         serializer = RegistrationSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
@@ -56,6 +69,8 @@ class RegisterAPIView(APIView):
 
 
 class VerifyOTPAPIView(APIView):
+    permission_classes = [AllowAny]
+
     def post(self, request):
         serializer = VerifyOTPSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
@@ -132,12 +147,18 @@ from rest_framework import status
 
 
 class LoginAPIView(APIView):
+    permission_classes = [AllowAny]
 
     def post(self, request):
         serializer = LoginSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
 
         user = serializer.validated_data["user"]
+        if user.role == User.Role.MENTOR and not user.is_approved:
+            return Response(
+                {"detail": "Mentor account not approved yet"},
+                status=status.HTTP_403_FORBIDDEN,
+            )
 
         otp = generate_otp()
         challenge_id = str(uuid.uuid4())
@@ -166,6 +187,7 @@ class LoginAPIView(APIView):
 
 
 class VerifyLoginOTPAPIView(APIView):
+    permission_classes = [AllowAny]
 
     def post(self, request):
         serializer = VerifyLoginOTPSerializer(data=request.data)
@@ -191,6 +213,12 @@ class VerifyLoginOTPAPIView(APIView):
         redis_client.delete(f"login_ctx:{challenge_id}")
 
         user = User.objects.get(id=user_id)
+
+        if user.role == User.Role.MENTOR and not user.is_approved:
+            return Response(
+                {"detail": "Mentor account not approved yet"},
+                status=status.HTTP_403_FORBIDDEN,
+            )
         tokens = generate_tokens(user)
 
         response = Response({**tokens, "role": user.role}, status=status.HTTP_200_OK)
@@ -199,3 +227,55 @@ class VerifyLoginOTPAPIView(APIView):
         response.delete_cookie("challenge_id")
 
         return response
+
+
+class ProfileUpdateAPIView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        user = request.user
+
+        data = {
+            "email": user.email,
+            "username": user.username,
+            "full_name": user.full_name,
+            "phone": user.phone,
+            "role": user.role,
+        }
+
+        if user.role == User.Role.DEVELOPER:
+            profile = user.developer_profile
+            data.update(
+                {
+                    "skills": profile.skills,
+                    "profile_image": profile.profile_image,
+                }
+            )
+
+        elif user.role == User.Role.MENTOR:
+            profile = user.mentor_profile
+            data.update(
+                {
+                    "skills": profile.skills,
+                    "profile_image": profile.profile_image,
+                    "years_of_experience": profile.years_of_experience,
+                    "experience_proof": profile.experience_proof,
+                }
+            )
+
+        serializer = ProfileDetailSerializer(data)
+        return Response(serializer.data)
+
+    def patch(self, request):
+        serializer = ProfileUpdateSerializer(
+            request.user,
+            data=request.data,
+            partial=True,  
+            context={"request": request},
+        )
+        serializer.is_valid(raise_exception=True)
+        serializer.save()
+        return Response(
+            {"detail": "Profile updated successfully"},
+            status=status.HTTP_200_OK,
+        )
